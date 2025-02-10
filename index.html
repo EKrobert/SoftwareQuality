@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- FontAwesome pour les icônes -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <!-- Ajoutez le CDN de SweetAlert2 -->
+    <link href="https://cdn.jsdelivr.net/npm/sweetalert2@11.7.0/dist/sweetalert2.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11.7.0/dist/sweetalert2.all.min.js"></script>
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+
+    <div class="container mt-2">
+        <h1 class="text-center mb-4">Dashboard de Gestion Température</h1>
+        <div class="row">
+            <!-- Surveillance en Temps Réel -->
+            <div class="col-md-6">
+                <div class="card shadow-sm">
+                    <div class="card-body">
+                        <h5 class="card-title"><i class="fas fa-thermometer-half"></i> Surveillance en Temps Réel</h5>
+                        <p><strong>Température Actuelle : </strong><span id="currentTemperature">--</span> °C</p>
+                        <p><strong>Humidité Actuelle : </strong><span id="currentHumidity">--</span> %</p>
+                        <!-- canvas -->
+                        <canvas id="temperatureChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            <!-- Configuration Personnalisée -->
+            <div class="col-md-3">
+                <div class="card shadow-sm">
+                    <div class="card-body">
+                        <h5 class="card-title"><i class="fas fa-cogs"></i> Configuration Personnalisée</h5>
+                        <div class="mb-3">
+                            <label for="seuilTemperature" class="form-label">Seuil Température Critique (°C)</label>
+                            <input type="number" class="form-control" id="seuilTemperature" value="30">
+                        </div>
+                        <div class="mb-3">
+                            <label for="startTime" class="form-label">Heure de Début (HH:MM)</label>
+                            <input type="time" class="form-control" id="startTime" value="00:00">
+                        </div>
+                        <div class="mb-3">
+                            <label for="endTime" class="form-label">Heure de Fin (HH:MM)</label>
+                            <input type="time" class="form-control" id="endTime" value="23:59">
+                        </div>
+                        <button class="btn btn-primary w-100" onclick="applySettings()">
+                            <i class="fas fa-check-circle"></i> Appliquer les Paramètres
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <!-- Contrôle Manuel -->
+            <div class="col-md-3">
+                <div class="card shadow-sm">
+                    <div class="card-body">
+                        <h5 class="card-title"><i class="fas fa-power-off"></i> Contrôle Manuel</h5>
+                        <button class="btn btn-success w-100 mb-2" id="activateButton"
+                            onclick="triggerBuzzer('activate')">
+                            <i class="fas fa-play-circle"></i> Activer le Buzzer
+                        </button>
+                        <button class="btn btn-danger w-100" id="desactivateButton"
+                            onclick="triggerBuzzer('desactivate')">
+                            <i class="fas fa-stop-circle"></i> Désactiver le Buzzer
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script>
+        // Données statiques pour le graphique
+        let labels = ['21h', '22h', '23h', '00h', '01h'];
+        let dataTemperature = [22, 23.5, 24, 25.2, 26];
+        let dataHumidity = [40, 42, 45, 43, 44];
+        let dataA = [25, 52, 45, 54, 64];
+        let utr = [0, 1, 2, 3, 4];
+    
+        // Initialisation du graphique
+        const ctx = document.getElementById('temperatureChart').getContext('2d');
+        let chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [], //labels,
+                datasets: [
+                    {
+                        label: 'Température (°C)',
+                        data: [], //dataTemperature,
+                        borderColor: 'rgba(255, 99, 132, 1)',
+                        backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                        borderWidth: 2
+                    },
+                    {
+                        label: 'Humidité (%)',
+                        data: [], //dataHumidity,
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                        borderWidth: 2
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top'
+                    }
+                },
+                scales: {
+                    x: {
+                        title: {
+                            display: true,
+                            text: 'Heure'
+                        }
+                    },
+                    y: {
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+    
+        function addDataPoint(newTime, newTemperature, newHumidity) {
+            chart.data.labels.push(newTime);
+            chart.data.datasets[0].data.push(newTemperature);
+            chart.data.datasets[1].data.push(newHumidity);
+            chart.update();
+            document.getElementById("currentTemperature").textContent = newTemperature.toFixed(1);
+            document.getElementById("currentHumidity").textContent = newHumidity.toFixed(1);
+        }
+    
+        // WebSockets
+        var telemetrySocket = new WebSocket(location.origin.replace(/^http/, 'ws') + "/temperature/telemetry.ws");
+        var commandsSocket = new WebSocket(location.origin.replace(/^http/, 'ws') + "/temperature/commands.ws");
+    
+        // Lorsque le WebSocket de télémétrie reçoit un message
+        telemetrySocket.onmessage = function (event) {
+            const telemetry = JSON.parse(event.data);
+    
+            // Mise à jour de la température et de l'humidité affichées
+            document.getElementById("currentTemperature").textContent = telemetry.temperature.toFixed(1);
+            document.getElementById("currentHumidity").textContent = telemetry.humidity.toFixed(1);
+    
+            // Ajouter les nouvelles données au graphique
+            addDataPoint(telemetry.timestamp, telemetry.temperature, telemetry.humidity);
+    
+            // Récupérer la valeur du seuil
+            const threshold = parseFloat(document.getElementById("seuilTemperature").value);
+    
+            // Contrôle des boutons et du buzzer en fonction de la température
+            if (telemetry.temperature > threshold) {
+                triggerBuzzer('activate');
+                toggleButtons(false, true);  // Désactiver Activer, Activer Désactiver
+            } else {
+                triggerBuzzer('desactivate');
+                toggleButtons(true, false);  // Activer Activer, Désactiver Désactiver
+            }
+        };
+    
+        // Fonction pour activer/désactiver le buzzer
+        function triggerBuzzer(action) {
+            if (action === 'activate') {
+                console.log("Buzzer activé");
+                // Ajoutez ici la logique pour activer le buzzer (via WebSocket ou API)
+                showAlert('Buzzer activé', 'success');
+            } else if (action === 'desactivate') {
+                console.log("Buzzer désactivé");
+                // Ajoutez ici la logique pour désactiver le buzzer (via WebSocket ou API)
+                showAlert('Buzzer désactivé', 'success');
+            }
+        }
+    
+        // Fonction pour afficher une alerte
+        function showAlert(message, type) {
+            alert(`${type === 'success' ? 'Succès' : 'Erreur'} : ${message}`);
+        }
+    
+        // Fonction pour activer/désactiver les boutons
+        function toggleButtons(activateBtnState, desactivateBtnState) {
+            document.getElementById("activateButton").disabled = !activateBtnState;
+            document.getElementById("desactivateButton").disabled = !desactivateBtnState;
+        }
+    
+        // Optionnel: gérer les erreurs WebSocket
+        telemetrySocket.onerror = function (error) {
+            console.error('WebSocket Error:', error);
+        };
+    
+        telemetrySocket.onclose = function (event) {
+            if (event.wasClean) {
+                console.log('WebSocket fermé proprement');
+            } else {
+                console.error('WebSocket fermé avec erreur');
+            }
+        };
+    
+        // Fonction pour afficher une alerte de succès avec SweetAlert2
+        function showAlert(message) {
+            Swal.fire({
+                icon: 'success', 
+                title: 'Succès', 
+                text: message, 
+                confirmButtonText: 'OK' 
+            });
+        }
+    
+        // Fonction pour envoyer l'état du buzzer via WebSocket
+        function sendBuzzerState(state) {
+            commandsSocket.send(JSON.stringify({"setBuzzerState": state}));
+        }
+    
+        // Boutons pour activer/désactiver manuellement le buzzer
+        document.getElementById("activateButton").onclick = function() {
+            sendBuzzerState('activate');
+            showAlert('Buzzer activé manuellement', 'success');
+        };
+    
+        document.getElementById("desactivateButton").onclick = function() {
+            sendBuzzerState('desactivate');
+            showAlert('Buzzer désactivé manuellement', 'success');
+        };
+    
+    </script>
+    
+    <script>
+        let seuilTemperature, startTime, endTime;
+        function applySettings() {
+            seuilTemperature = parseFloat(document.getElementById("seuilTemperature").value);
+            startTime = document.getElementById("startTime").value;
+            endTime = document.getElementById("endTime").value;
+            console.log('Seuil:', seuilTemperature, 'Start Time:', startTime, 'End Time:', endTime);
+
+            // Affichage d'une alerte de succès avec SweetAlert2
+            Swal.fire({
+                icon: 'success',
+                title: 'Paramètres appliqués',
+                text: `Seuil Température: ${seuilTemperature}°C\nHeure de Début: ${startTime}\nHeure de Fin: ${endTime}`,
+                confirmButtonText: 'OK'
+            });
+        }
+    </script>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+
+</html>
